@@ -1,0 +1,53 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import SessionList from '../../components/SessionList.tsx';
+import GitPanel from '../../components/GitPanel.tsx';
+import { getProjectSessions, getProjectsDir, listSessionFiles, deriveProjectName } from '../../lib/projects.ts';
+import { getSessionMetadata } from '../../lib/parser.ts';
+import { getGitInfo } from '../../lib/git.ts';
+import { join } from 'node:path';
+
+const { id } = Astro.params;
+if (!id) return Astro.redirect('/');
+
+const projectDir = join(getProjectsDir(), id);
+const sessions = await getProjectSessions(id);
+
+// Derive project metadata
+const sessionFiles = listSessionFiles(projectDir);
+let cwd = '';
+if (sessionFiles.length > 0) {
+  try {
+    const meta = await getSessionMetadata(sessionFiles[0]);
+    cwd = meta.cwd;
+  } catch {}
+}
+
+const name = deriveProjectName(cwd, id);
+const git = getGitInfo(cwd);
+---
+
+<Layout title={`${name} — Claude Conversations`} back={{ href: '/', label: 'Projects' }}>
+  <div class="flex gap-8">
+    <!-- Main content -->
+    <div class="flex-1 min-w-0">
+      <div class="mb-6">
+        <div class="flex items-center gap-2 mb-1">
+          <svg class="h-5 w-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+          </svg>
+          <h1 class="text-xl font-bold text-gray-100">{name}</h1>
+        </div>
+        <p class="text-sm text-gray-500">{cwd || projectDir}</p>
+        <p class="text-xs text-gray-600 mt-1">{sessions.length} {sessions.length === 1 ? 'session' : 'sessions'}</p>
+      </div>
+
+      <SessionList sessions={sessions} client:load />
+    </div>
+
+    <!-- Sidebar -->
+    <aside class="hidden lg:block w-72 flex-shrink-0">
+      <GitPanel git={git} cwd={cwd || projectDir} client:load />
+    </aside>
+  </div>
+</Layout>

@@ -1,0 +1,29 @@
+---
+import Layout from '../layouts/Layout.astro';
+import ProjectCard from '../components/ProjectCard.tsx';
+import { getProjects } from '../lib/projects.ts';
+
+const projects = await getProjects();
+---
+
+<Layout title="Claude Conversations — Projects">
+  <div class="mb-8">
+    <h1 class="text-2xl font-bold text-gray-100">My Projects</h1>
+    <p class="mt-1 text-sm text-gray-500">{projects.length} projects · Claude Code session history</p>
+  </div>
+
+  {projects.length === 0 ? (
+    <div class="rounded-md border border-gray-700 bg-[#161b22] p-12 text-center">
+      <p class="text-gray-500">No projects found.</p>
+      <p class="mt-2 text-sm text-gray-600">
+        Make sure <code class="bg-gray-800 px-1 rounded">~/.claude/projects/</code> exists and contains session files.
+      </p>
+    </div>
+  ) : (
+    <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      {projects.map((project) => (
+        <ProjectCard project={project} client:load />
+      ))}
+    </div>
+  )}
+</Layout>
