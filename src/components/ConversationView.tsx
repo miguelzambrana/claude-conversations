@@ -149,17 +149,7 @@ export default function ConversationView({ messages, sessionId }: Props) {
     return idx !== undefined ? messages[idx + 1] : undefined;
   }
 
-  // UUID → turn index for virtualizer scroll navigation
-  const uuidToTurnIdx = useMemo(() => {
-    const m = new Map<string, number>();
-    turns.forEach((turn, i) => {
-      m.set(turn.userMessage.uuid, i);
-      turn.responses.forEach((msg) => m.set(msg.uuid, i));
-    });
-    return m;
-  }, [turns]);
-
-  // Models present in this session (for legend)
+  // ── Models present (for legend) ────────────────────────────────────────────
   const modelsInSession = useMemo(() => {
     const s = new Set<string>();
     for (const msg of messages) {
@@ -172,6 +162,33 @@ export default function ConversationView({ messages, sessionId }: Props) {
     }
     return s;
   }, [messages]);
+
+  // ── Tool filter ─────────────────────────────────────────────────────────────
+  // Count how many turns use each tool (not individual invocations)
+  const toolStats = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const turn of turns) {
+      const toolsInTurn = new Set<string>();
+      for (const msg of turn.responses) {
+        for (const block of msg.content) {
+          if (block.type === 'tool_use') toolsInTurn.add(block.name);
+        }
+      }
+      for (const tool of toolsInTurn) m.set(tool, (m.get(tool) ?? 0) + 1);
+    }
+    return new Map([...m].sort((a, b) => b[1] - a[1]));
+  }, [turns]);
+
+  const [toolFilter, setToolFilter] = useState('All');
+
+  const filteredTurns = useMemo(() => {
+    if (toolFilter === 'All') return turns;
+    return turns.filter((turn) =>
+      turn.responses.some((msg) =>
+        msg.content.some((b) => b.type === 'tool_use' && b.name === toolFilter)
+      )
+    );
+  }, [turns, toolFilter]);
 
   // ── Persistent collapse ────────────────────────────────────────────────────
   const storageKey = `turns-collapsed-${sessionId}`;
@@ -201,26 +218,6 @@ export default function ConversationView({ messages, sessionId }: Props) {
   const searchRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
-        e.preventDefault();
-        setSearchVisible((v) => {
-          const next = !v;
-          if (next) setTimeout(() => searchRef.current?.focus(), 30);
-          return next;
-        });
-      }
-      if (e.key === 'Escape') {
-        setSearchVisible(false);
-        setSearchQuery('');
-        setMatchUuids([]);
-      }
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, []);
-
-  useEffect(() => {
     const q = searchQuery.trim().toLowerCase();
     if (!q) { setMatchUuids([]); return; }
     setMatchUuids(messages.filter((m) => msgMatchesQuery(m, q)).map((m) => m.uuid));
@@ -237,28 +234,39 @@ export default function ConversationView({ messages, sessionId }: Props) {
     if (!matchUuids.length) return new Set<string>();
     const matchSet = new Set(matchUuids);
     const out = new Set<string>();
-    for (const turn of turns) {
+    for (const turn of filteredTurns) {
       if (matchSet.has(turn.userMessage.uuid) || turn.responses.some((m) => matchSet.has(m.uuid))) {
         out.add(turn.id);
       }
     }
     return out;
-  }, [matchUuids, turns]);
+  }, [matchUuids, filteredTurns]);
 
   // ── Virtual scrolling ──────────────────────────────────────────────────────
   const listRef = useRef<HTMLDivElement>(null);
   const [listOffset, setListOffset] = useState(0);
+  const currentTurnIdxRef = useRef(0);
 
   useLayoutEffect(() => {
     setListOffset(listRef.current?.offsetTop ?? 0);
   }, []);
 
   const virtualizer = useWindowVirtualizer({
-    count: turns.length,
+    count: filteredTurns.length,
     estimateSize: () => 300,
     overscan: 4,
     scrollMargin: listOffset,
   });
+
+  // UUID → turn index for virtualizer navigation
+  const uuidToTurnIdx = useMemo(() => {
+    const m = new Map<string, number>();
+    filteredTurns.forEach((turn, i) => {
+      m.set(turn.userMessage.uuid, i);
+      turn.responses.forEach((msg) => m.set(msg.uuid, i));
+    });
+    return m;
+  }, [filteredTurns]);
 
   // Search scroll via virtualizer
   useEffect(() => {
@@ -269,7 +277,7 @@ export default function ConversationView({ messages, sessionId }: Props) {
     }
   }, [matchIdx, matchUuids]);
 
-  // Hash scroll on load via virtualizer
+  // Hash scroll on load
   useEffect(() => {
     const hash = window.location.hash.slice(1);
     if (!hash) return;
@@ -280,6 +288,63 @@ export default function ConversationView({ messages, sessionId }: Props) {
       }, 300);
       return () => clearTimeout(timer);
     }
+  }, []);
+
+  // ── Keyboard shortcuts (stable listener + mutable handler ref) ─────────────
+  const shortcutRef = useRef<(e: KeyboardEvent) => void>(() => {});
+
+  // Re-assign the handler on every render so it always closes over fresh state
+  shortcutRef.current = (e: KeyboardEvent) => {
+    // Ctrl+F / Cmd+F — open search
+    if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+      e.preventDefault();
+      setSearchVisible((v) => {
+        const next = !v;
+        if (next) setTimeout(() => searchRef.current?.focus(), 30);
+        return next;
+      });
+      return;
+    }
+    // Escape — close search
+    if (e.key === 'Escape') {
+      setSearchVisible(false);
+      setSearchQuery('');
+      setMatchUuids([]);
+      return;
+    }
+    // Vim-style shortcuts — skip when typing in an input
+    const tag = (e.target as HTMLElement)?.tagName ?? '';
+    if (['INPUT', 'TEXTAREA', 'SELECT'].includes(tag)) return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+    if (e.key === 'j') {
+      e.preventDefault();
+      currentTurnIdxRef.current = Math.min(currentTurnIdxRef.current + 1, filteredTurns.length - 1);
+      virtualizer.scrollToIndex(currentTurnIdxRef.current, { align: 'start' });
+    } else if (e.key === 'k') {
+      e.preventDefault();
+      currentTurnIdxRef.current = Math.max(currentTurnIdxRef.current - 1, 0);
+      virtualizer.scrollToIndex(currentTurnIdxRef.current, { align: 'start' });
+    } else if (e.key === 'e') {
+      const anyExpanded = filteredTurns.some((t) => !collapsedTurns.has(t.id));
+      setCollapsedTurns((prev) => {
+        const next = new Set(prev);
+        if (anyExpanded) filteredTurns.forEach((t) => next.add(t.id));
+        else             filteredTurns.forEach((t) => next.delete(t.id));
+        try { localStorage.setItem(storageKey, JSON.stringify([...next])); } catch {}
+        return next;
+      });
+    } else if (e.key === 'g') {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      currentTurnIdxRef.current = 0;
+    }
+  };
+
+  // Register once — delegates to the always-fresh ref
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => shortcutRef.current(e);
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
   }, []);
 
   if (messages.length === 0) {
@@ -334,16 +399,25 @@ export default function ConversationView({ messages, sessionId }: Props) {
             </span>
           )}
 
-          {/* Search button */}
-          <button
-            onClick={() => { setSearchVisible(true); setTimeout(() => searchRef.current?.focus(), 30); }}
-            className="ml-auto flex items-center gap-1.5 rounded border border-gray-700 px-2 py-0.5 text-gray-500 hover:text-gray-300 hover:border-gray-500 transition-colors"
-          >
-            <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-            </svg>
-            <kbd className="font-mono text-xs">Ctrl+F</kbd>
-          </button>
+          <div className="ml-auto flex items-center gap-2">
+            {/* Keyboard shortcut hint */}
+            <span className="hidden sm:flex items-center gap-2 text-gray-700 border-r border-gray-800 pr-2">
+              <span title="j/k: navigate turns"><kbd className="font-mono">j</kbd>/<kbd className="font-mono">k</kbd></span>
+              <span title="e: expand/collapse all"><kbd className="font-mono">e</kbd></span>
+              <span title="g: go to top"><kbd className="font-mono">g</kbd></span>
+            </span>
+
+            {/* Search button */}
+            <button
+              onClick={() => { setSearchVisible(true); setTimeout(() => searchRef.current?.focus(), 30); }}
+              className="flex items-center gap-1.5 rounded border border-gray-700 px-2 py-0.5 text-gray-500 hover:text-gray-300 hover:border-gray-500 transition-colors"
+            >
+              <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
+              <kbd className="font-mono text-xs">Ctrl+F</kbd>
+            </button>
+          </div>
         </div>
       )}
 
@@ -382,6 +456,33 @@ export default function ConversationView({ messages, sessionId }: Props) {
         </div>
       )}
 
+      {/* ── Tool filter pills ────────────────────────────────────────────────── */}
+      {toolStats.size > 0 && (
+        <div className="mb-4 flex flex-wrap items-center gap-1.5">
+          <span className="text-xs text-gray-600 mr-0.5">Filter:</span>
+          <FilterPill
+            label="All"
+            count={turns.length}
+            active={toolFilter === 'All'}
+            onClick={() => setToolFilter('All')}
+          />
+          {[...toolStats.entries()].map(([tool, count]) => (
+            <FilterPill
+              key={tool}
+              label={tool}
+              count={count}
+              active={toolFilter === tool}
+              onClick={() => setToolFilter(toolFilter === tool ? 'All' : tool)}
+            />
+          ))}
+          {toolFilter !== 'All' && (
+            <span className="text-xs text-gray-500 ml-1">
+              → {filteredTurns.length} turn{filteredTurns.length !== 1 ? 's' : ''}
+            </span>
+          )}
+        </div>
+      )}
+
       {/* ── Virtualized turns list ───────────────────────────────────────────── */}
       <div ref={listRef}>
         <div
@@ -392,7 +493,7 @@ export default function ConversationView({ messages, sessionId }: Props) {
           }}
         >
           {virtualItems.map((virtualRow) => {
-            const turn = turns[virtualRow.index];
+            const turn = filteredTurns[virtualRow.index];
             return (
               <div
                 key={virtualRow.key}
@@ -424,6 +525,26 @@ export default function ConversationView({ messages, sessionId }: Props) {
   );
 }
 
+// ─── Filter pill ───────────────────────────────────────────────────────────────
+
+function FilterPill({ label, count, active, onClick }: {
+  label: string; count: number; active: boolean; onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors ${
+        active
+          ? 'bg-blue-600 text-white'
+          : 'border border-gray-700 bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-gray-300'
+      }`}
+    >
+      {label}
+      <span className={`ml-1 ${active ? 'opacity-70' : 'text-gray-600'}`}>{count}</span>
+    </button>
+  );
+}
+
 // ─── Turn block ────────────────────────────────────────────────────────────────
 
 interface TurnBlockProps {
@@ -446,8 +567,8 @@ function TurnBlock({ turn, isCollapsed, onToggle, nextMessage, matchSet, activeU
 
   const turnModel = turn.responses.find((m) => m.role === 'assistant')?.model;
   const modelMeta = getModelMeta(turnModel);
-  const turnUsage = useMemo(() => sumUsage(turn.responses),              [turn.responses]);
-  const turnCost  = useMemo(() => totalCostForMessages(turn.responses),  [turn.responses]);
+  const turnUsage = useMemo(() => sumUsage(turn.responses),             [turn.responses]);
+  const turnCost  = useMemo(() => totalCostForMessages(turn.responses), [turn.responses]);
 
   return (
     <div
@@ -474,17 +595,14 @@ function TurnBlock({ turn, isCollapsed, onToggle, nextMessage, matchSet, activeU
                      border-t border-gray-800 transition-colors duration-150
                      bg-[#090d12] hover:bg-[#0d1117] group"
         >
-          {/* AI badge */}
           <span className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full bg-gray-700 text-[10px] font-bold text-gray-300">
             AI
           </span>
 
-          {/* Model name with dynamic color */}
           <span className={`text-xs font-semibold ${modelMeta.textClass}`}>
             {modelMeta.label}
           </span>
 
-          {/* Tool count pill */}
           {toolCallCount > 0 && (
             <span className="rounded-full border border-gray-700 bg-gray-800 px-2 py-0.5 text-xs text-gray-500">
               {toolCallCount} tool{toolCallCount !== 1 ? 's' : ''}
@@ -493,21 +611,18 @@ function TurnBlock({ turn, isCollapsed, onToggle, nextMessage, matchSet, activeU
 
           <div className="flex-1" />
 
-          {/* Cost */}
           {turnCost > 0 && (
             <span className="font-mono text-xs font-semibold text-emerald-600 group-hover:text-emerald-500 transition-colors">
               {formatCost(turnCost)}
             </span>
           )}
 
-          {/* Output tokens */}
           {turnUsage.output_tokens > 0 && (
             <span className="text-xs text-gray-600 font-mono">
               {formatTokens(turnUsage.output_tokens)} tok
             </span>
           )}
 
-          {/* Chevron */}
           <svg
             className={`h-4 w-4 flex-shrink-0 text-gray-600 group-hover:text-gray-400 transition-all duration-200 ${
               isCollapsed ? '' : 'rotate-180'

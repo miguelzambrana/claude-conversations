@@ -1,0 +1,57 @@
+---
+import type { FileAccess } from '../lib/parser.ts';
+
+interface Props {
+  files: FileAccess[];
+}
+
+const { files } = Astro.props;
+if (files.length === 0) return;
+
+const OP_STYLE: Record<string, string> = {
+  R: 'text-blue-400  border-blue-800  bg-blue-950/50',
+  E: 'text-yellow-400 border-yellow-800 bg-yellow-950/40',
+  W: 'text-green-400 border-green-800  bg-green-950/50',
+};
+---
+
+<div class="rounded-md border border-gray-700 bg-[#161b22] p-4">
+  <h3 class="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-3">
+    Files Touched
+    <span class="ml-1 text-gray-600 font-normal normal-case">({files.length})</span>
+  </h3>
+
+  <div class="space-y-1.5 max-h-72 overflow-y-auto pr-1">
+    {files.map(({ path, ops, count }) => {
+      const parts = path.split('/');
+      const name  = parts.pop() ?? path;
+      const dir   = parts.join('/') || null;
+
+      return (
+        <div class="flex items-start gap-2 group" title={path}>
+          <!-- Op badges -->
+          <div class="flex gap-0.5 flex-shrink-0 mt-0.5">
+            {ops.map(op => (
+              <span class={`inline-flex items-center rounded border px-1 py-px text-[9px] font-bold leading-none ${OP_STYLE[op] ?? 'text-gray-400 border-gray-700'}`}>
+                {op}
+              </span>
+            ))}
+          </div>
+
+          <!-- File name + dir -->
+          <div class="flex-1 min-w-0">
+            <span class="text-xs text-gray-300 font-mono truncate block">{name}</span>
+            {dir && (
+              <span class="text-[10px] text-gray-600 font-mono truncate block">{dir}</span>
+            )}
+          </div>
+
+          <!-- Access count -->
+          {count > 1 && (
+            <span class="flex-shrink-0 text-[10px] text-gray-600 mt-0.5">×{count}</span>
+          )}
+        </div>
+      );
+    })}
+  </div>
+</div>

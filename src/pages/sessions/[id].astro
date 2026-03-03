@@ -3,7 +3,8 @@ import Layout from '../../layouts/Layout.astro';
 import ConversationView from '../../components/ConversationView.tsx';
 import GitCommitPanel from '../../components/GitCommitPanel.tsx';
 import { findSessionFile } from '../../lib/projects.ts';
-import { parseSession, getSessionMetadata } from '../../lib/parser.ts';
+import { parseSession, getSessionMetadata, extractFilesTouched } from '../../lib/parser.ts';
+import FilesTouchedPanel from '../../components/FilesTouchedPanel.astro';
 import { getGitBranch } from '../../lib/git.ts';
 
 const { id } = Astro.params;
@@ -18,7 +19,8 @@ const [messages, meta] = await Promise.all([
 ]);
 
 const branch = meta.cwd ? getGitBranch(meta.cwd) : null;
-const slug = meta.slug || id.slice(0, 8);
+const slug   = meta.slug || id.slice(0, 8);
+const files  = extractFilesTouched(messages);
 ---
 
 <Layout title={`${slug} — Claude Conversations`} back={{ href: 'javascript:history.back()', label: 'Back' }}>
@@ -46,6 +48,8 @@ const slug = meta.slug || id.slice(0, 8);
         <p class="text-xs text-gray-400 font-mono break-all">{id}</p>
         <p class="text-xs text-gray-500 mt-2">{messages.length} messages</p>
       </div>
+
+      <FilesTouchedPanel files={files} />
 
       <GitCommitPanel cwd={meta.cwd} branch={branch} client:load />
     </aside>

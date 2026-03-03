@@ -139,6 +139,45 @@ function extractFirstText(content: ContentBlock[] | string): string {
   return '';
 }
 
+// ─── Files touched ─────────────────────────────────────────────────────────
+
+export interface FileAccess {
+  path: string;
+  ops: string[]; // 'R' | 'W' | 'E'
+  count: number;
+}
+
+export function extractFilesTouched(messages: Message[]): FileAccess[] {
+  const map = new Map<string, { opsSet: Set<string>; count: number }>();
+
+  for (const msg of messages) {
+    for (const block of msg.content) {
+      if (block.type !== 'tool_use') continue;
+      const inp = block.input as Record<string, unknown>;
+      const filePath = inp.file_path;
+      if (typeof filePath !== 'string' || !filePath) continue;
+
+      let op: string;
+      switch (block.name) {
+        case 'Read':                        op = 'R'; break;
+        case 'Edit': case 'MultiEdit':
+        case 'NotebookEdit':                op = 'E'; break;
+        case 'Write':                       op = 'W'; break;
+        default: continue;
+      }
+
+      if (!map.has(filePath)) map.set(filePath, { opsSet: new Set(), count: 0 });
+      const entry = map.get(filePath)!;
+      entry.opsSet.add(op);
+      entry.count++;
+    }
+  }
+
+  return Array.from(map.entries())
+    .map(([path, { opsSet, count }]) => ({ path, ops: [...opsSet].sort(), count }))
+    .sort((a, b) => b.count - a.count);
+}
+
 export async function extractTopTools(filePath: string): Promise<string[]> {
   const toolCounts: Record<string, number> = {};
 
