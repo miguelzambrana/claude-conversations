@@ -18,6 +18,13 @@ export interface Session {
   cwd: string;
 }
 
+export interface TokenUsage {
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_input_tokens: number;
+  cache_read_input_tokens: number;
+}
+
 export interface Message {
   uuid: string;
   parentUuid: string | null;
@@ -27,6 +34,8 @@ export interface Message {
   cwd: string;
   gitBranch: string;
   isSidechain?: boolean;
+  usage?: TokenUsage;
+  model?: string;
 }
 
 export type ContentBlock = TextBlock | ToolUseBlock | ToolResultBlock | ThinkingBlock;
@@ -85,6 +94,12 @@ export interface RawMessage {
     role: 'user' | 'assistant';
     content: ContentBlock[] | string;
     model?: string;
+    usage?: {
+      input_tokens: number;
+      output_tokens: number;
+      cache_creation_input_tokens?: number;
+      cache_read_input_tokens?: number;
+    };
   };
   slug?: string;
 }

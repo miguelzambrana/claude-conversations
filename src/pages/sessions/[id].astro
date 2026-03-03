@@ -35,7 +35,7 @@ const slug = meta.slug || id.slice(0, 8);
         </div>
       </div>
 
-      <ConversationView messages={messages} client:load />
+      <ConversationView messages={messages} sessionId={id} client:load />
     </div>
 
     <!-- Git sidebar -->

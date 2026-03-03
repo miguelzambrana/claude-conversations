@@ -1,4 +1,6 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import type { Message, ToolUseBlock, ToolResultBlock, ContentBlock } from '../lib/types.ts';
 import ToolCallBlock from './ToolCallBlock.tsx';
 import MonacoCode from './MonacoCode.tsx';
@@ -7,43 +9,15 @@ import { editorHeight } from './MonacoCode.tsx';
 interface Props {
   message: Message;
   nextMessage?: Message;
+  isMatch?: boolean;
+  isActiveMatch?: boolean;
 }
 
 function formatTime(d: Date | string): string {
   return new Date(d).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
 }
 
-// Split text into plain text and code fence segments
-interface TextSegment { kind: 'text'; content: string }
-interface CodeSegment { kind: 'code'; lang: string; content: string }
-type Segment = TextSegment | CodeSegment;
-
-function parseSegments(text: string): Segment[] {
-  const segments: Segment[] = [];
-  const fenceRe = /```(\w*)\n?([\s\S]*?)```/g;
-  let last = 0;
-  let match: RegExpExecArray | null;
-
-  while ((match = fenceRe.exec(text)) !== null) {
-    if (match.index > last) {
-      segments.push({ kind: 'text', content: text.slice(last, match.index) });
-    }
-    segments.push({ kind: 'code', lang: match[1] || 'plaintext', content: match[2] });
-    last = fenceRe.lastIndex;
-  }
-
-  if (last < text.length) {
-    segments.push({ kind: 'text', content: text.slice(last) });
-  }
-
-  return segments;
-}
-
-function hasCodeFences(text: string): boolean {
-  return /```[\s\S]*?```/.test(text);
-}
-
-export default function MessageBlock({ message, nextMessage }: Props) {
+export default function MessageBlock({ message, nextMessage, isMatch, isActiveMatch }: Props) {
   const [thinkingOpen, setThinkingOpen] = useState(false);
   const isUser = message.role === 'user';
 
@@ -57,12 +31,20 @@ export default function MessageBlock({ message, nextMessage }: Props) {
   }
 
   if (isUser) {
-    const hasOnlyToolResults = message.content.length > 0 && message.content.every((b) => b.type === 'tool_result');
+    const hasOnlyToolResults =
+      message.content.length > 0 && message.content.every((b) => b.type === 'tool_result');
     if (hasOnlyToolResults) return null;
   }
 
+  // Highlight ring styles
+  const ringStyle = isActiveMatch
+    ? 'ring-2 ring-yellow-400 shadow-lg shadow-yellow-500/20'
+    : isMatch
+    ? 'ring-1 ring-yellow-600/60'
+    : '';
+
   return (
-    <div id={message.uuid} className={`flex gap-3 ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>
+    <div id={message.uuid} className={`flex gap-3 scroll-mt-20 ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>
       {/* Avatar */}
       <div
         className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold ${
@@ -77,10 +59,20 @@ export default function MessageBlock({ message, nextMessage }: Props) {
         <div className={`text-xs text-gray-500 mb-1 ${isUser ? 'text-right' : 'text-left'}`}>
           {isUser ? 'User' : 'Claude'} · {formatTime(message.timestamp)}
           {message.gitBranch && <span className="ml-2 text-gray-600">({message.gitBranch})</span>}
+          {message.usage && (
+            <span className="ml-2 text-gray-600">
+              ↑{message.usage.input_tokens.toLocaleString()} ↓{message.usage.output_tokens.toLocaleString()}
+              {message.usage.cache_read_input_tokens > 0 && (
+                <span className="text-green-800 ml-1">
+                  ⚡{message.usage.cache_read_input_tokens.toLocaleString()}
+                </span>
+              )}
+            </span>
+          )}
         </div>
 
         <div
-          className={`rounded-lg px-4 py-3 text-sm leading-relaxed w-full ${
+          className={`rounded-lg px-4 py-3 text-sm leading-relaxed w-full transition-all ${ringStyle} ${
             isUser
               ? 'bg-blue-900/60 text-blue-100 rounded-tr-none border border-blue-800/50'
               : 'bg-[#1c2128] text-gray-200 rounded-tl-none border border-gray-700/60'
@@ -93,6 +85,7 @@ export default function MessageBlock({ message, nextMessage }: Props) {
               toolResultMap={toolResultMap}
               thinkingOpen={thinkingOpen}
               setThinkingOpen={setThinkingOpen}
+              isUser={isUser}
             />
           ))}
         </div>
@@ -106,15 +99,18 @@ interface ContentRendererProps {
   toolResultMap: Map<string, ToolResultBlock>;
   thinkingOpen: boolean;
   setThinkingOpen: (v: boolean) => void;
+  isUser: boolean;
 }
 
-function ContentRenderer({ block, toolResultMap, thinkingOpen, setThinkingOpen }: ContentRendererProps) {
+function ContentRenderer({ block, toolResultMap, thinkingOpen, setThinkingOpen, isUser }: ContentRendererProps) {
   if (block.type === 'text') {
     if (!block.text.trim()) return null;
-    if (hasCodeFences(block.text)) {
-      return <RichText text={block.text} />;
-    }
-    return <div className="whitespace-pre-wrap break-words">{block.text}</div>;
+    // User messages: preserve plain text. Assistant messages: render markdown.
+    return isUser ? (
+      <div className="whitespace-pre-wrap break-words">{block.text}</div>
+    ) : (
+      <MarkdownContent text={block.text} />
+    );
   }
 
   if (block.type === 'thinking') {
@@ -145,41 +141,115 @@ function ContentRenderer({ block, toolResultMap, thinkingOpen, setThinkingOpen }
     );
   }
 
-  // tool_result: skip (shown inside assistant via toolResultMap)
   return null;
 }
 
-function RichText({ text }: { text: string }) {
-  const segments = parseSegments(text);
+// ─── Markdown renderer ────────────────────────────────────────────────────────
 
+function MarkdownContent({ text }: { text: string }) {
   return (
-    <div className="space-y-2">
-      {segments.map((seg, i) => {
-        if (seg.kind === 'text') {
-          return seg.content.trim() ? (
-            <div key={i} className="whitespace-pre-wrap break-words">
-              {seg.content}
-            </div>
-          ) : null;
-        }
-        // code fence → Monaco
-        const code = seg.content;
-        const lang = seg.lang === '' ? 'plaintext' : seg.lang;
-        return (
-          <div key={i} className="rounded overflow-hidden border border-gray-700">
-            {seg.lang && (
-              <div className="px-3 py-1 text-xs text-gray-500 bg-[#1c2128] border-b border-gray-700 font-mono">
-                {seg.lang}
+    <div className="prose-custom">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          // Code blocks → Monaco; inline code → styled span
+          code({ className, children, ...props }) {
+            const match = /language-(\w+)/.exec(className ?? '');
+            const lang = match?.[1] ?? 'plaintext';
+            const code = String(children).replace(/\n$/, '');
+            const isBlock = code.includes('\n') || !!match;
+            if (isBlock) {
+              return (
+                <div className="my-2 rounded overflow-hidden border border-gray-700">
+                  {lang !== 'plaintext' && (
+                    <div className="px-3 py-1 text-xs text-gray-500 bg-[#1c2128] border-b border-gray-700 font-mono">
+                      {lang}
+                    </div>
+                  )}
+                  <MonacoCode code={code} language={lang} height={editorHeight(code, 48, 400)} />
+                </div>
+              );
+            }
+            return (
+              <code
+                className="rounded bg-gray-800 px-1 py-0.5 text-xs font-mono text-gray-200"
+                {...props}
+              >
+                {children}
+              </code>
+            );
+          },
+          // Paragraphs
+          p({ children }) {
+            return <p className="mb-2 last:mb-0 leading-relaxed">{children}</p>;
+          },
+          // Headings
+          h1({ children }) { return <h1 className="text-base font-bold text-gray-100 mt-3 mb-1">{children}</h1>; },
+          h2({ children }) { return <h2 className="text-sm font-bold text-gray-100 mt-3 mb-1">{children}</h2>; },
+          h3({ children }) { return <h3 className="text-sm font-semibold text-gray-200 mt-2 mb-1">{children}</h3>; },
+          // Lists
+          ul({ children }) { return <ul className="list-disc list-inside mb-2 space-y-0.5 text-gray-300">{children}</ul>; },
+          ol({ children }) { return <ol className="list-decimal list-inside mb-2 space-y-0.5 text-gray-300">{children}</ol>; },
+          li({ children }) { return <li className="leading-relaxed">{children}</li>; },
+          // Emphasis
+          strong({ children }) { return <strong className="font-semibold text-gray-100">{children}</strong>; },
+          em({ children }) { return <em className="italic text-gray-300">{children}</em>; },
+          // Links
+          a({ href, children }) {
+            return (
+              <a
+                href={href}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-blue-400 underline hover:text-blue-300"
+              >
+                {children}
+              </a>
+            );
+          },
+          // Blockquote
+          blockquote({ children }) {
+            return (
+              <blockquote className="border-l-2 border-gray-600 pl-3 my-2 text-gray-400 italic">
+                {children}
+              </blockquote>
+            );
+          },
+          // Horizontal rule
+          hr() { return <hr className="my-3 border-gray-700" />; },
+          // Table
+          table({ children }) {
+            return (
+              <div className="my-2 overflow-x-auto">
+                <table className="w-full text-xs border-collapse border border-gray-700">{children}</table>
               </div>
-            )}
-            <MonacoCode
-              code={code}
-              language={lang}
-              height={editorHeight(code, 48, 400)}
-            />
-          </div>
-        );
-      })}
+            );
+          },
+          thead({ children }) { return <thead className="bg-gray-800">{children}</thead>; },
+          th({ children }) {
+            return <th className="border border-gray-700 px-2 py-1 text-left text-gray-300 font-semibold">{children}</th>;
+          },
+          td({ children }) {
+            return <td className="border border-gray-700 px-2 py-1 text-gray-400">{children}</td>;
+          },
+          // Task list checkbox
+          input({ type, checked }) {
+            if (type === 'checkbox') {
+              return (
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  readOnly
+                  className="mr-1.5 accent-blue-500"
+                />
+              );
+            }
+            return null;
+          },
+        }}
+      >
+        {text}
+      </ReactMarkdown>
     </div>
   );
 }

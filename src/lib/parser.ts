@@ -28,6 +28,7 @@ export async function parseSession(filePath: string): Promise<Message[]> {
     if (!raw.message) continue;
 
     const content = normalizeContent(raw.message.content);
+    const rawUsage = raw.message.usage;
 
     messages.push({
       uuid: raw.uuid,
@@ -38,6 +39,15 @@ export async function parseSession(filePath: string): Promise<Message[]> {
       cwd: raw.cwd ?? '',
       gitBranch: raw.gitBranch ?? '',
       isSidechain: raw.isSidechain ?? false,
+      model: raw.message.model,
+      usage: rawUsage
+        ? {
+            input_tokens: rawUsage.input_tokens ?? 0,
+            output_tokens: rawUsage.output_tokens ?? 0,
+            cache_creation_input_tokens: rawUsage.cache_creation_input_tokens ?? 0,
+            cache_read_input_tokens: rawUsage.cache_read_input_tokens ?? 0,
+          }
+        : undefined,
     });
   }
 
