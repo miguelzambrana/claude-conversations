@@ -1,106 +1,197 @@
 import { useState } from 'react';
 import type { ToolUseBlock, ToolResultBlock } from '../lib/types.ts';
 import CodeDiffViewer from './CodeDiffViewer.tsx';
+import MonacoCode from './MonacoCode.tsx';
+import { detectLanguage, editorHeight } from './MonacoCode.tsx';
 
 interface Props {
   toolUse: ToolUseBlock;
   toolResult?: ToolResultBlock;
 }
 
-const TOOL_STYLES: Record<string, { icon: string; label: string; badgeClass: string }> = {
-  Read:       { icon: '📄', label: 'Read',       badgeClass: 'bg-blue-900 text-blue-300 border-blue-700' },
-  Edit:       { icon: '✏️',  label: 'Edit',       badgeClass: 'bg-yellow-900 text-yellow-300 border-yellow-700' },
-  Bash:       { icon: '💻', label: 'Bash',       badgeClass: 'bg-red-900 text-red-300 border-red-700' },
-  Write:      { icon: '📝', label: 'Write',      badgeClass: 'bg-green-900 text-green-300 border-green-700' },
-  Grep:       { icon: '🔍', label: 'Grep',       badgeClass: 'bg-gray-700 text-gray-300 border-gray-600' },
-  Glob:       { icon: '🗂️', label: 'Glob',       badgeClass: 'bg-gray-700 text-gray-300 border-gray-600' },
-  TaskCreate: { icon: '✅', label: 'TaskCreate', badgeClass: 'bg-purple-900 text-purple-300 border-purple-700' },
-  TaskUpdate: { icon: '🔄', label: 'TaskUpdate', badgeClass: 'bg-purple-900 text-purple-300 border-purple-700' },
-  TaskList:   { icon: '📋', label: 'TaskList',   badgeClass: 'bg-purple-900 text-purple-300 border-purple-700' },
-  TaskGet:    { icon: '📋', label: 'TaskGet',    badgeClass: 'bg-purple-900 text-purple-300 border-purple-700' },
-  Agent:      { icon: '🤖', label: 'Agent',      badgeClass: 'bg-indigo-900 text-indigo-300 border-indigo-700' },
+const TOOL_META: Record<string, { icon: string; color: string; bg: string; border: string }> = {
+  Read:       { icon: '📄', color: '#58A6FF', bg: '#0d1b2e', border: '#1f3a5f' },
+  Edit:       { icon: '✏️',  color: '#D29922', bg: '#1f1a0a', border: '#5a4a10' },
+  Bash:       { icon: '💻', color: '#F78166', bg: '#1f0d0a', border: '#5a2010' },
+  Write:      { icon: '📝', color: '#3FB950', bg: '#0a1f10', border: '#155224' },
+  Grep:       { icon: '🔍', color: '#8B949E', bg: '#161b22', border: '#30363d' },
+  Glob:       { icon: '🗂️', color: '#8B949E', bg: '#161b22', border: '#30363d' },
+  TaskCreate: { icon: '✅', color: '#BC8CFF', bg: '#1a0f2e', border: '#4a2f7f' },
+  TaskUpdate: { icon: '🔄', color: '#BC8CFF', bg: '#1a0f2e', border: '#4a2f7f' },
+  TaskList:   { icon: '📋', color: '#BC8CFF', bg: '#1a0f2e', border: '#4a2f7f' },
+  TaskGet:    { icon: '📋', color: '#BC8CFF', bg: '#1a0f2e', border: '#4a2f7f' },
+  Agent:      { icon: '🤖', color: '#39D353', bg: '#0a1f15', border: '#1a5225' },
 };
 
-function getToolStyle(name: string) {
-  return TOOL_STYLES[name] ?? { icon: '🔧', label: name, badgeClass: 'bg-gray-700 text-gray-300 border-gray-600' };
+function getMeta(name: string) {
+  return TOOL_META[name] ?? { icon: '🔧', color: '#8B949E', bg: '#161b22', border: '#30363d' };
 }
 
 function getResultText(result?: ToolResultBlock): string {
   if (!result) return '';
   if (typeof result.content === 'string') return result.content;
-  const parts: string[] = [];
-  for (const block of result.content) {
-    if (block.type === 'text') parts.push(block.text);
+  return result.content
+    .filter((b) => b.type === 'text')
+    .map((b) => (b as { type: 'text'; text: string }).text)
+    .join('\n');
+}
+
+function getToolSummary(name: string, input: Record<string, unknown>): string {
+  switch (name) {
+    case 'Edit':
+    case 'Write':
+    case 'Read':
+      return typeof input.file_path === 'string' ? input.file_path : '';
+    case 'Bash':
+      return typeof input.command === 'string' ? (input.command as string).slice(0, 80) : '';
+    case 'Grep':
+      return typeof input.pattern === 'string' ? `/${input.pattern}/` : '';
+    case 'Glob':
+      return typeof input.pattern === 'string' ? input.pattern as string : '';
+    case 'Agent':
+      return typeof input.description === 'string' ? input.description as string : '';
+    default:
+      return '';
   }
-  return parts.join('\n');
 }
 
 export default function ToolCallBlock({ toolUse, toolResult }: Props) {
   const [open, setOpen] = useState(false);
-  const style = getToolStyle(toolUse.name);
+  const meta = getMeta(toolUse.name);
   const input = toolUse.input as Record<string, unknown>;
   const isEdit = toolUse.name === 'Edit';
   const isWrite = toolUse.name === 'Write';
+  const isBash = toolUse.name === 'Bash';
+  const isRead = toolUse.name === 'Read';
   const resultText = getResultText(toolResult);
   const hasError = toolResult?.is_error;
+  const summary = getToolSummary(toolUse.name, input);
+
+  // Detect language for code display
+  const filePath = typeof input.file_path === 'string' ? input.file_path : '';
 
   return (
-    <div className={`rounded-md border my-1 overflow-hidden ${style.badgeClass.includes('border-') ? '' : 'border-gray-700'}`}
-         style={{ borderColor: undefined }}>
+    <div
+      className="rounded-md my-1 overflow-hidden"
+      style={{ borderWidth: 1, borderStyle: 'solid', borderColor: meta.border, backgroundColor: meta.bg }}
+    >
+      {/* Header button */}
       <button
         onClick={() => setOpen((v) => !v)}
-        className={`w-full flex items-center gap-2 px-3 py-2 text-xs font-medium text-left hover:opacity-90 transition-opacity rounded-t-md border ${style.badgeClass}`}
+        className="w-full flex items-center gap-2 px-3 py-2 text-xs font-medium text-left transition-opacity hover:opacity-80"
       >
-        <span>{style.icon}</span>
-        <span className="font-mono font-semibold">{style.label}</span>
-        {(isEdit || isWrite) && typeof input.file_path === 'string' && (
-          <span className="ml-1 text-gray-400 truncate">{input.file_path as string}</span>
+        <span>{meta.icon}</span>
+        <span className="font-mono font-semibold" style={{ color: meta.color }}>
+          {toolUse.name}
+        </span>
+        {summary && (
+          <span className="ml-1 truncate font-mono text-gray-400 text-xs">{summary}</span>
         )}
-        {toolUse.name === 'Bash' && typeof input.command === 'string' && (
-          <span className="ml-1 text-gray-400 truncate font-mono">{(input.command as string).slice(0, 60)}</span>
-        )}
-        {toolUse.name === 'Read' && typeof input.file_path === 'string' && (
-          <span className="ml-1 text-gray-400 truncate">{input.file_path as string}</span>
-        )}
-        {toolUse.name === 'Grep' && typeof input.pattern === 'string' && (
-          <span className="ml-1 text-gray-400 truncate font-mono">/{input.pattern as string}/</span>
-        )}
-        {hasError && <span className="ml-auto text-red-400">Error</span>}
-        <span className="ml-auto flex-shrink-0 text-gray-400">{open ? '▲' : '▼'}</span>
+        {hasError && <span className="ml-auto mr-2 text-red-400 font-semibold">Error</span>}
+        <span className="ml-auto flex-shrink-0 text-gray-500 text-xs">{open ? '▲' : '▼'}</span>
       </button>
 
       {open && (
-        <div className="border-t border-gray-700 bg-[#0d1117]">
+        <div className="border-t" style={{ borderColor: meta.border }}>
           {(isEdit || isWrite) ? (
-            <div className="p-2">
-              <CodeDiffViewer
-                filePath={typeof input.file_path === 'string' ? input.file_path : ''}
-                oldString={typeof input.old_string === 'string' ? input.old_string : undefined}
-                newString={typeof input.new_string === 'string' ? input.new_string : typeof input.content === 'string' ? input.content : undefined}
-                mode={isWrite ? 'write' : 'diff'}
-              />
-            </div>
+            <CodeDiffViewer
+              filePath={filePath}
+              oldString={typeof input.old_string === 'string' ? input.old_string : undefined}
+              newString={
+                typeof input.new_string === 'string'
+                  ? input.new_string
+                  : typeof input.content === 'string'
+                  ? input.content
+                  : undefined
+              }
+              mode={isWrite ? 'write' : 'diff'}
+            />
+          ) : isBash ? (
+            <BashContent
+              command={typeof input.command === 'string' ? input.command : ''}
+              output={resultText}
+              hasError={!!hasError}
+            />
+          ) : isRead && resultText ? (
+            <ReadContent filePath={filePath} content={resultText} />
           ) : (
-            <div className="px-3 py-2 space-y-2">
-              <div>
-                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Input</p>
-                <pre className="text-xs text-gray-300 whitespace-pre-wrap break-all max-h-48 overflow-y-auto">
-                  {JSON.stringify(input, null, 2)}
-                </pre>
-              </div>
-              {resultText && (
-                <div>
-                  <p className={`text-xs font-semibold uppercase tracking-wider mb-1 ${hasError ? 'text-red-400' : 'text-gray-500'}`}>
-                    {hasError ? 'Error' : 'Result'}
-                  </p>
-                  <pre className={`text-xs whitespace-pre-wrap break-all max-h-64 overflow-y-auto ${hasError ? 'text-red-300' : 'text-gray-300'}`}>
-                    {resultText.slice(0, 3000)}{resultText.length > 3000 ? '\n… (truncated)' : ''}
-                  </pre>
-                </div>
-              )}
-            </div>
+            <GenericContent input={input} resultText={resultText} hasError={!!hasError} />
           )}
         </div>
+      )}
+    </div>
+  );
+}
+
+// Bash: show command + output in Monaco
+function BashContent({ command, output, hasError }: { command: string; output: string; hasError: boolean }) {
+  return (
+    <div>
+      <div className="border-b border-gray-800 bg-[#0d1117]">
+        <div className="px-3 py-1 text-xs text-gray-500 uppercase tracking-wider">Command</div>
+        <MonacoCode
+          code={command}
+          language="shell"
+          height={editorHeight(command, 48, 150)}
+        />
+      </div>
+      {output && (
+        <div>
+          <div className={`px-3 py-1 text-xs uppercase tracking-wider ${hasError ? 'text-red-400' : 'text-gray-500'}`}>
+            {hasError ? 'Error Output' : 'Output'}
+          </div>
+          <MonacoCode
+            code={output}
+            language="plaintext"
+            height={editorHeight(output, 48, 400)}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Read: show file content in Monaco
+function ReadContent({ filePath, content }: { filePath: string; content: string }) {
+  return (
+    <MonacoCode
+      code={content}
+      filePath={filePath}
+      height={editorHeight(content, 80, 500)}
+    />
+  );
+}
+
+// Generic: JSON input + text result
+function GenericContent({
+  input,
+  resultText,
+  hasError,
+}: {
+  input: Record<string, unknown>;
+  resultText: string;
+  hasError: boolean;
+}) {
+  const inputJson = JSON.stringify(input, null, 2);
+  return (
+    <div>
+      <div className="px-3 py-1 text-xs text-gray-500 uppercase tracking-wider">Input</div>
+      <MonacoCode
+        code={inputJson}
+        language="json"
+        height={editorHeight(inputJson, 48, 300)}
+      />
+      {resultText && (
+        <>
+          <div className={`px-3 py-1 text-xs uppercase tracking-wider border-t border-gray-800 ${hasError ? 'text-red-400' : 'text-gray-500'}`}>
+            {hasError ? 'Error' : 'Result'}
+          </div>
+          <MonacoCode
+            code={resultText.slice(0, 5000) + (resultText.length > 5000 ? '\n… (truncated)' : '')}
+            language="plaintext"
+            height={editorHeight(resultText.slice(0, 5000), 48, 400)}
+          />
+        </>
       )}
     </div>
   );

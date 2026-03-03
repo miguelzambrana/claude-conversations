@@ -1,10 +1,10 @@
 ---
 import Layout from '../../layouts/Layout.astro';
 import ConversationView from '../../components/ConversationView.tsx';
-import GitPanel from '../../components/GitPanel.tsx';
+import GitCommitPanel from '../../components/GitCommitPanel.tsx';
 import { findSessionFile } from '../../lib/projects.ts';
 import { parseSession, getSessionMetadata } from '../../lib/parser.ts';
-import { getGitInfo } from '../../lib/git.ts';
+import { getGitBranch } from '../../lib/git.ts';
 
 const { id } = Astro.params;
 if (!id) return Astro.redirect('/');
@@ -17,12 +17,12 @@ const [messages, meta] = await Promise.all([
   getSessionMetadata(filePath),
 ]);
 
-const git = getGitInfo(meta.cwd);
+const branch = meta.cwd ? getGitBranch(meta.cwd) : null;
 const slug = meta.slug || id.slice(0, 8);
 ---
 
 <Layout title={`${slug} — Claude Conversations`} back={{ href: 'javascript:history.back()', label: 'Back' }}>
-  <div class="flex gap-8">
+  <div class="flex gap-6">
     <!-- Conversation -->
     <div class="flex-1 min-w-0">
       <div class="mb-6">
@@ -31,23 +31,23 @@ const slug = meta.slug || id.slice(0, 8);
           <span>{new Date(meta.timestamp).toLocaleString()}</span>
           {meta.gitBranch && <span class="font-mono">branch: {meta.gitBranch}</span>}
           <span>{meta.messageCount} messages</span>
-          <span class="truncate">{meta.cwd}</span>
+          <span class="truncate max-w-xs">{meta.cwd}</span>
         </div>
       </div>
 
       <ConversationView messages={messages} client:load />
     </div>
 
-    <!-- Sidebar -->
-    <aside class="hidden lg:block w-72 flex-shrink-0 space-y-4">
+    <!-- Git sidebar -->
+    <aside class="hidden lg:block w-80 flex-shrink-0 space-y-4">
       <!-- Session info -->
       <div class="rounded-md border border-gray-700 bg-[#161b22] p-4">
         <h3 class="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-2">Session</h3>
         <p class="text-xs text-gray-400 font-mono break-all">{id}</p>
-        <p class="text-xs text-gray-500 mt-2">{messages.length} messages loaded</p>
+        <p class="text-xs text-gray-500 mt-2">{messages.length} messages</p>
       </div>
 
-      <GitPanel git={git} cwd={meta.cwd} client:load />
+      <GitCommitPanel cwd={meta.cwd} branch={branch} client:load />
     </aside>
   </div>
 </Layout>
