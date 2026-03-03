@@ -1,0 +1,82 @@
+---
+import type { FileAccess } from '../lib/parser.ts';
+
+interface Props {
+  projectName: string;
+  totalCost: number;
+  bashCount: number;
+  files: FileAccess[];
+  hasSidechains: boolean;
+  dominantModel: string | null;
+}
+
+const { projectName, totalCost, bashCount, files, hasSidechains, dominantModel } = Astro.props;
+
+const filesEdited  = files.filter(f => f.ops.includes('E')).length;
+const filesWritten = files.filter(f => f.ops.includes('W')).length;
+const filesRead    = files.filter(f => f.ops.includes('R')).length;
+
+function fmtCost(c: number) {
+  if (c < 0.0001) return null;
+  if (c < 0.01)   return `$${c.toFixed(4)}`;
+  return `$${c.toFixed(3)}`;
+}
+
+const costStr = fmtCost(totalCost);
+
+const parts: string[] = [];
+if (filesEdited > 0)  parts.push(`${filesEdited} file${filesEdited !== 1 ? 's' : ''} edited`);
+if (filesWritten > 0) parts.push(`${filesWritten} written`);
+if (filesRead > 0)    parts.push(`${filesRead} read`);
+if (bashCount > 0)    parts.push(`${bashCount} shell cmd${bashCount !== 1 ? 's' : ''}`);
+
+const modelColors: Record<string, string> = {
+  'opus':   'text-rose-400',
+  'sonnet': 'text-blue-400',
+  'haiku':  'text-teal-400',
+};
+const modelClass = dominantModel ? (modelColors[dominantModel] ?? 'text-gray-400') : 'text-gray-400';
+---
+
+{(parts.length > 0 || costStr) && (
+  <div class="mb-6 rounded-md border border-gray-800 bg-[#0d1117] px-4 py-3 text-xs text-gray-500 flex flex-wrap items-center gap-x-3 gap-y-1">
+    <!-- Project name -->
+    <span class="text-gray-400 font-medium">{projectName}</span>
+
+    {parts.length > 0 && (
+      <span class="text-gray-600">·</span>
+    )}
+
+    <!-- Activity parts -->
+    {parts.map((p, i) => (
+      <>
+        <span>{p}</span>
+        {i < parts.length - 1 && <span class="text-gray-700">·</span>}
+      </>
+    ))}
+
+    <!-- Cost -->
+    {costStr && (
+      <>
+        <span class="text-gray-600">·</span>
+        <span class={`font-mono font-semibold text-emerald-500`}>{costStr}</span>
+      </>
+    )}
+
+    <!-- Model badge -->
+    {dominantModel && (
+      <>
+        <span class="text-gray-600">·</span>
+        <span class={`font-medium capitalize ${modelClass}`}>{dominantModel}</span>
+      </>
+    )}
+
+    <!-- Sidechain indicator -->
+    {hasSidechains && (
+      <>
+        <span class="text-gray-600">·</span>
+        <span class="text-purple-500" title="This session includes sub-agent calls">sub-agents</span>
+      </>
+    )}
+  </div>
+)}

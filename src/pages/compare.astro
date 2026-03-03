@@ -1,0 +1,172 @@
+---
+import Layout from '../layouts/Layout.astro';
+import { findSessionFile, deriveProjectName } from '../lib/projects.ts';
+import { parseSession, getSessionMetadata, extractFilesTouched } from '../lib/parser.ts';
+import { computeMessagesCost, formatCost } from '../lib/analytics.ts';
+import { basename } from 'node:path';
+
+const { searchParams } = Astro.url;
+const idA = searchParams.get('a');
+const idB = searchParams.get('b');
+
+// ── Load sessions ─────────────────────────────────────────────────────────────
+type SessionData = {
+  id: string;
+  slug: string;
+  projectName: string;
+  cwd: string;
+  timestamp: Date;
+  messageCount: number;
+  cost: number;
+  bashCount: number;
+  filesRead: number;
+  filesEdited: number;
+  filesWritten: number;
+  models: string[];
+  topTools: Array<[string, number]>;
+};
+
+async function loadSession(id: string): Promise<SessionData | null> {
+  const filePath = findSessionFile(id);
+  if (!filePath) return null;
+  try {
+    const [messages, meta] = await Promise.all([parseSession(filePath), getSessionMetadata(filePath)]);
+    const files    = extractFilesTouched(messages);
+    const cost     = computeMessagesCost(messages);
+    const bash     = messages.reduce((n, m) => n + m.content.filter(b => b.type === 'tool_use' && (b as any).name === 'Bash').length, 0);
+    const toolMap  = new Map<string, number>();
+    const modelSet = new Set<string>();
+    for (const msg of messages) {
+      for (const b of msg.content) {
+        if (b.type === 'tool_use') toolMap.set(b.name, (toolMap.get(b.name) ?? 0) + 1);
+      }
+      if (msg.role === 'assistant' && msg.model) {
+        const m = msg.model.toLowerCase();
+        if (m.includes('opus')) modelSet.add('Opus');
+        else if (m.includes('sonnet')) modelSet.add('Sonnet');
+        else if (m.includes('haiku')) modelSet.add('Haiku');
+      }
+    }
+    return {
+      id, slug: meta.slug || id.slice(0, 8),
+      projectName: deriveProjectName(meta.cwd, basename(filePath, '.jsonl')),
+      cwd: meta.cwd, timestamp: meta.timestamp, messageCount: meta.messageCount,
+      cost, bashCount: bash,
+      filesRead: files.filter(f => f.ops.includes('R')).length,
+      filesEdited: files.filter(f => f.ops.includes('E')).length,
+      filesWritten: files.filter(f => f.ops.includes('W')).length,
+      models: [...modelSet],
+      topTools: [...toolMap.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8),
+    };
+  } catch { return null; }
+}
+
+const sessionA = idA ? await loadSession(idA) : null;
+const sessionB = idB ? await loadSession(idB) : null;
+
+// All other sessions from same project for "pick B" picker
+const needsPicker = sessionA && !sessionB;
+
+function winner(a: number, b: number, lowerBetter = true): [boolean, boolean] {
+  if (a === b) return [false, false];
+  return lowerBetter ? [a < b, a > b] : [a > b, a < b];
+}
+---
+
+<Layout title="Compare Sessions — Claude Conversations">
+  <div class="mb-6">
+    <h1 class="text-xl font-bold text-gray-100">Session Comparison</h1>
+    <p class="text-sm text-gray-500 mt-1">Compare cost, tools, and output between two sessions</p>
+  </div>
+
+  {!idA ? (
+    <p class="text-gray-500 text-sm">No sessions selected. Use the ⇄ button on a session to start comparing.</p>
+  ) : needsPicker ? (
+    <div>
+      <div class="mb-4 rounded-md border border-gray-700 bg-[#161b22] p-4">
+        <p class="text-xs text-gray-500 mb-1">Selected session A</p>
+        <p class="text-sm text-blue-400 font-medium">{sessionA!.slug}</p>
+        <p class="text-xs text-gray-600">{sessionA!.projectName} · {sessionA!.timestamp.toLocaleString()}</p>
+      </div>
+      <p class="text-sm text-gray-400">Now navigate to another session and click ⇄ to select session B, or add <code class="text-xs bg-gray-800 rounded px-1">?a={idA}&b=SESSION_ID</code> to the URL.</p>
+    </div>
+  ) : (!sessionA || !sessionB) ? (
+    <p class="text-gray-500 text-sm">Session not found.</p>
+  ) : (
+    <div>
+      <!-- Side-by-side comparison table -->
+      <div class="grid grid-cols-3 gap-px bg-gray-800 rounded-lg overflow-hidden text-sm">
+
+        <!-- Header -->
+        <div class="bg-[#161b22] px-4 py-3 text-xs text-gray-600 uppercase tracking-wider">Metric</div>
+        <a href={`/sessions/${sessionA.id}`} class="bg-[#161b22] px-4 py-3 hover:bg-[#1c2128] transition-colors">
+          <p class="font-medium text-blue-400 truncate">{sessionA.slug}</p>
+          <p class="text-xs text-gray-600 truncate">{sessionA.projectName}</p>
+          <p class="text-xs text-gray-700">{sessionA.timestamp.toLocaleString()}</p>
+        </a>
+        <a href={`/sessions/${sessionB.id}`} class="bg-[#161b22] px-4 py-3 hover:bg-[#1c2128] transition-colors">
+          <p class="font-medium text-blue-400 truncate">{sessionB.slug}</p>
+          <p class="text-xs text-gray-600 truncate">{sessionB.projectName}</p>
+          <p class="text-xs text-gray-700">{sessionB.timestamp.toLocaleString()}</p>
+        </a>
+
+        {/* Rows */}
+        {[
+          { label: 'Cost',          a: sessionA.cost,         b: sessionB.cost,         fmt: (v: number) => formatCost(v),        lower: true  },
+          { label: 'Messages',      a: sessionA.messageCount, b: sessionB.messageCount, fmt: (v: number) => String(v),            lower: true  },
+          { label: 'Shell commands',a: sessionA.bashCount,    b: sessionB.bashCount,    fmt: (v: number) => String(v),            lower: true  },
+          { label: 'Files read',    a: sessionA.filesRead,    b: sessionB.filesRead,    fmt: (v: number) => String(v),            lower: true  },
+          { label: 'Files edited',  a: sessionA.filesEdited,  b: sessionB.filesEdited,  fmt: (v: number) => String(v),            lower: false },
+          { label: 'Files written', a: sessionA.filesWritten, b: sessionB.filesWritten, fmt: (v: number) => String(v),            lower: false },
+        ].map(({ label, a, b, fmt, lower }) => {
+          const [aWins, bWins] = winner(a as number, b as number, lower);
+          return (
+            <>
+              <div class="bg-[#0d1117] px-4 py-2.5 text-xs text-gray-500 flex items-center">{label}</div>
+              <div class={`bg-[#0d1117] px-4 py-2.5 text-xs font-mono flex items-center gap-2 ${aWins ? 'text-emerald-400' : bWins ? 'text-gray-500' : 'text-gray-300'}`}>
+                {fmt(a as number)}
+                {aWins && <span class="text-emerald-600 text-[10px]">▼</span>}
+              </div>
+              <div class={`bg-[#0d1117] px-4 py-2.5 text-xs font-mono flex items-center gap-2 ${bWins ? 'text-emerald-400' : aWins ? 'text-gray-500' : 'text-gray-300'}`}>
+                {fmt(b as number)}
+                {bWins && <span class="text-emerald-600 text-[10px]">▼</span>}
+              </div>
+            </>
+          );
+        })}
+
+        <!-- Models row -->
+        <div class="bg-[#0d1117] px-4 py-2.5 text-xs text-gray-500">Models</div>
+        <div class="bg-[#0d1117] px-4 py-2.5 text-xs text-gray-300">{sessionA.models.join(', ') || '—'}</div>
+        <div class="bg-[#0d1117] px-4 py-2.5 text-xs text-gray-300">{sessionB.models.join(', ') || '—'}</div>
+
+        <!-- Top tools rows -->
+        {sessionA.topTools.length > 0 && (
+          <>
+            <div class="bg-[#0d1117] px-4 py-2.5 text-xs text-gray-500 col-span-3 border-t border-gray-800">
+              Top Tools
+            </div>
+            {Array.from({ length: Math.max(sessionA.topTools.length, sessionB.topTools.length) }, (_, i) => {
+              const ta = sessionA.topTools[i];
+              const tb = sessionB.topTools[i];
+              return (
+                <>
+                  <div class="bg-[#0d1117] px-4 py-1.5 text-xs text-gray-700 font-mono">{ta?.[0] ?? ''}</div>
+                  <div class="bg-[#0d1117] px-4 py-1.5 text-xs text-gray-400 font-mono">{ta ? `${ta[0]} × ${ta[1]}` : '—'}</div>
+                  <div class="bg-[#0d1117] px-4 py-1.5 text-xs text-gray-400 font-mono">{tb ? `${tb[0]} × ${tb[1]}` : '—'}</div>
+                </>
+              );
+            })}
+          </>
+        )}
+      </div>
+
+      <!-- Swap / open links -->
+      <div class="mt-4 flex gap-3 text-xs">
+        <a href={`/compare?a=${sessionB.id}&b=${sessionA.id}`} class="text-gray-500 hover:text-gray-300 transition-colors">⇄ Swap</a>
+        <a href={`/sessions/${sessionA.id}`} class="text-blue-500 hover:text-blue-400 transition-colors">Open A →</a>
+        <a href={`/sessions/${sessionB.id}`} class="text-blue-500 hover:text-blue-400 transition-colors">Open B →</a>
+      </div>
+    </div>
+  )}
+</Layout>
