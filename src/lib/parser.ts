@@ -1,10 +1,21 @@
-import { createReadStream } from 'node:fs';
+import { createReadStream, statSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 import type { Message, RawMessage, ContentBlock } from './types.ts';
 
 const SKIP_TYPES = new Set(['progress', 'file-history-snapshot', 'system']);
 
+// ─── In-memory session cache ────────────────────────────────────────────────
+interface CacheEntry { mtime: number; messages: Message[] }
+const sessionCache = new Map<string, CacheEntry>();
+
 export async function parseSession(filePath: string): Promise<Message[]> {
+  // Serve from cache if file hasn't changed
+  try {
+    const mtime = statSync(filePath).mtimeMs;
+    const entry = sessionCache.get(filePath);
+    if (entry && entry.mtime === mtime) return entry.messages;
+  } catch { /* file may not exist yet */ }
+
   const messages: Message[] = [];
 
   const rl = createInterface({
@@ -50,6 +61,11 @@ export async function parseSession(filePath: string): Promise<Message[]> {
         : undefined,
     });
   }
+
+  // Store in cache
+  try {
+    sessionCache.set(filePath, { mtime: statSync(filePath).mtimeMs, messages });
+  } catch {}
 
   return messages;
 }

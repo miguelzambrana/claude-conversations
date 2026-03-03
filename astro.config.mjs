@@ -17,7 +17,7 @@ export default defineConfig({
   vite: {
     plugins: [tailwindcss()],
     optimizeDeps: {
-      include: ['@monaco-editor/react', 'react-markdown', 'remark-gfm'],
+      include: ['@monaco-editor/react', 'react-markdown', 'remark-gfm', '@tanstack/react-virtual'],
     },
   }
 });
