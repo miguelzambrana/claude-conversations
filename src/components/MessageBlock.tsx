@@ -146,107 +146,102 @@ function ContentRenderer({ block, toolResultMap, thinkingOpen, setThinkingOpen, 
 
 // ─── Markdown renderer ────────────────────────────────────────────────────────
 
+// Hoisted outside the component so the object reference is stable across renders.
+// If components is recreated every render, ReactMarkdown remounts all children
+// (including Monaco editors), causing the scroll glitch.
+const MARKDOWN_COMPONENTS = {
+  code({ className, children, ...props }: any) {
+    const match = /language-(\w+)/.exec(className ?? '');
+    const lang = match?.[1] ?? 'plaintext';
+    const code = String(children).replace(/\n$/, '');
+    const isBlock = code.includes('\n') || !!match;
+    if (isBlock) {
+      return (
+        <div className="my-2 rounded overflow-hidden border border-gray-700">
+          {lang !== 'plaintext' && (
+            <div className="px-3 py-1 text-xs text-gray-500 bg-[#1c2128] border-b border-gray-700 font-mono">
+              {lang}
+            </div>
+          )}
+          <MonacoCode code={code} language={lang} height={editorHeight(code, 48, 400)} />
+        </div>
+      );
+    }
+    return (
+      <code
+        className="rounded bg-gray-800 px-1 py-0.5 text-xs font-mono text-gray-200"
+        {...props}
+      >
+        {children}
+      </code>
+    );
+  },
+  p({ children }: any) {
+    return <p className="mb-2 last:mb-0 leading-relaxed">{children}</p>;
+  },
+  h1({ children }: any) { return <h1 className="text-base font-bold text-gray-100 mt-3 mb-1">{children}</h1>; },
+  h2({ children }: any) { return <h2 className="text-sm font-bold text-gray-100 mt-3 mb-1">{children}</h2>; },
+  h3({ children }: any) { return <h3 className="text-sm font-semibold text-gray-200 mt-2 mb-1">{children}</h3>; },
+  ul({ children }: any) { return <ul className="list-disc list-inside mb-2 space-y-0.5 text-gray-300">{children}</ul>; },
+  ol({ children }: any) { return <ol className="list-decimal list-inside mb-2 space-y-0.5 text-gray-300">{children}</ol>; },
+  li({ children }: any) { return <li className="leading-relaxed">{children}</li>; },
+  strong({ children }: any) { return <strong className="font-semibold text-gray-100">{children}</strong>; },
+  em({ children }: any) { return <em className="italic text-gray-300">{children}</em>; },
+  a({ href, children }: any) {
+    return (
+      <a
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="text-blue-400 underline hover:text-blue-300"
+      >
+        {children}
+      </a>
+    );
+  },
+  blockquote({ children }: any) {
+    return (
+      <blockquote className="border-l-2 border-gray-600 pl-3 my-2 text-gray-400 italic">
+        {children}
+      </blockquote>
+    );
+  },
+  hr() { return <hr className="my-3 border-gray-700" />; },
+  table({ children }: any) {
+    return (
+      <div className="my-2 overflow-x-auto">
+        <table className="w-full text-xs border-collapse border border-gray-700">{children}</table>
+      </div>
+    );
+  },
+  thead({ children }: any) { return <thead className="bg-gray-800">{children}</thead>; },
+  th({ children }: any) {
+    return <th className="border border-gray-700 px-2 py-1 text-left text-gray-300 font-semibold">{children}</th>;
+  },
+  td({ children }: any) {
+    return <td className="border border-gray-700 px-2 py-1 text-gray-400">{children}</td>;
+  },
+  input({ type, checked }: any) {
+    if (type === 'checkbox') {
+      return (
+        <input
+          type="checkbox"
+          checked={checked}
+          readOnly
+          className="mr-1.5 accent-blue-500"
+        />
+      );
+    }
+    return null;
+  },
+};
+
 function MarkdownContent({ text }: { text: string }) {
   return (
     <div className="prose-custom">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
-        components={{
-          // Code blocks → Monaco; inline code → styled span
-          code({ className, children, ...props }) {
-            const match = /language-(\w+)/.exec(className ?? '');
-            const lang = match?.[1] ?? 'plaintext';
-            const code = String(children).replace(/\n$/, '');
-            const isBlock = code.includes('\n') || !!match;
-            if (isBlock) {
-              return (
-                <div className="my-2 rounded overflow-hidden border border-gray-700">
-                  {lang !== 'plaintext' && (
-                    <div className="px-3 py-1 text-xs text-gray-500 bg-[#1c2128] border-b border-gray-700 font-mono">
-                      {lang}
-                    </div>
-                  )}
-                  <MonacoCode code={code} language={lang} height={editorHeight(code, 48, 400)} />
-                </div>
-              );
-            }
-            return (
-              <code
-                className="rounded bg-gray-800 px-1 py-0.5 text-xs font-mono text-gray-200"
-                {...props}
-              >
-                {children}
-              </code>
-            );
-          },
-          // Paragraphs
-          p({ children }) {
-            return <p className="mb-2 last:mb-0 leading-relaxed">{children}</p>;
-          },
-          // Headings
-          h1({ children }) { return <h1 className="text-base font-bold text-gray-100 mt-3 mb-1">{children}</h1>; },
-          h2({ children }) { return <h2 className="text-sm font-bold text-gray-100 mt-3 mb-1">{children}</h2>; },
-          h3({ children }) { return <h3 className="text-sm font-semibold text-gray-200 mt-2 mb-1">{children}</h3>; },
-          // Lists
-          ul({ children }) { return <ul className="list-disc list-inside mb-2 space-y-0.5 text-gray-300">{children}</ul>; },
-          ol({ children }) { return <ol className="list-decimal list-inside mb-2 space-y-0.5 text-gray-300">{children}</ol>; },
-          li({ children }) { return <li className="leading-relaxed">{children}</li>; },
-          // Emphasis
-          strong({ children }) { return <strong className="font-semibold text-gray-100">{children}</strong>; },
-          em({ children }) { return <em className="italic text-gray-300">{children}</em>; },
-          // Links
-          a({ href, children }) {
-            return (
-              <a
-                href={href}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-blue-400 underline hover:text-blue-300"
-              >
-                {children}
-              </a>
-            );
-          },
-          // Blockquote
-          blockquote({ children }) {
-            return (
-              <blockquote className="border-l-2 border-gray-600 pl-3 my-2 text-gray-400 italic">
-                {children}
-              </blockquote>
-            );
-          },
-          // Horizontal rule
-          hr() { return <hr className="my-3 border-gray-700" />; },
-          // Table
-          table({ children }) {
-            return (
-              <div className="my-2 overflow-x-auto">
-                <table className="w-full text-xs border-collapse border border-gray-700">{children}</table>
-              </div>
-            );
-          },
-          thead({ children }) { return <thead className="bg-gray-800">{children}</thead>; },
-          th({ children }) {
-            return <th className="border border-gray-700 px-2 py-1 text-left text-gray-300 font-semibold">{children}</th>;
-          },
-          td({ children }) {
-            return <td className="border border-gray-700 px-2 py-1 text-gray-400">{children}</td>;
-          },
-          // Task list checkbox
-          input({ type, checked }) {
-            if (type === 'checkbox') {
-              return (
-                <input
-                  type="checkbox"
-                  checked={checked}
-                  readOnly
-                  className="mr-1.5 accent-blue-500"
-                />
-              );
-            }
-            return null;
-          },
-        }}
+        components={MARKDOWN_COMPONENTS}
       >
         {text}
       </ReactMarkdown>
